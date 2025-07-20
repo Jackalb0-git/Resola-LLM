@@ -1,0 +1,66 @@
+---
+- name: Provision AWS Infrastructure for LiteLLM Proxy
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Get VPC ID from Terraform
+      shell: terraform output -raw vpc_id
+      args:
+        chdir: ../ 
+      register: vpc_id_output
+      changed_when: false
+
+    - name: Get Subnet IDs from Terraform
+      shell: terraform output -json subnet_ids
+      args:
+        chdir: ../
+      register: subnet_ids_output
+      changed_when: false
+
+    - name: Get Region from Terraform
+      shell: terraform output -raw region
+      args:
+        chdir: ../
+      register: region_output
+      changed_when: false
+
+    - name: Get ALB SG ID from Terraform
+      shell: terraform output -raw alb_sg_id
+      args:
+        chdir: ../
+      register: alb_sg_id_output
+      changed_when: false
+      failed_when: false
+
+    - name: Set facts for variables
+      set_fact:
+        vpc_id: "{{ vpc_id_output.stdout | default('') }}"
+        subnet_ids: "{{ subnet_ids_output.stdout | default('[]') | from_json }}"
+        region: "{{ region_output.stdout | default('ap-northeast-1') }}"
+        alb_sg_id: "{{ alb_sg_id_output.stdout | default('') }}"
+      when: alb_sg_id_output.rc == 0
+
+    - name: Install AWS collections
+      command: ansible-galaxy collection install community.aws amazon.aws
+      args:
+        creates: ~/.ansible/collections/ansible_collections/community/aws
+
+    - name: Create ECS Cluster
+      community.aws.ecs_cluster:
+        name: ecs-ap-northeast-1-prod-litellm-cluster
+        region: "{{ region }}"
+        state: present
+
+    - name: Create Security Group for LiteLLM
+      amazon.aws.ec2_security_group:
+        name: aws_security_group.ecs_sg
+        description: Security group for LiteLLM ECS
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ region }}"
+        rules:
+          - proto: tcp
+            from_port: 8000
+            to_port: 8000
+            group_id: "{{ alb_sg_id }}"
+        state: present
+      when: alb_sg_id | length > 0
