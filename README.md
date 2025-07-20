@@ -1,4 +1,4 @@
-# Resola LLM Proxy Challenge
+# Resola LiteLLM Proxy Challenge
 
 ## Overview
 This project deploys a LiteLLM proxy server on AWS using Terraform, designed to route API requests to an Azure OpenAI model (gpt-4o). The infrastructure is built for production-like reliability, including networking (VPC), compute (ECS Fargate), storage (RDS PostgreSQL for logs and user management, ElastiCache Redis for caching), load balancing (ALB), security (WAF, security groups), monitoring (CloudWatch alarms, SNS alerts, budgets), and auto-scaling. The proxy handles LLM requests securely, with features like master key authentication and robot blocking.
@@ -6,10 +6,9 @@ This project deploys a LiteLLM proxy server on AWS using Terraform, designed to 
 The deployment uses Terraform for IaC, Docker for containerization, and GitHub Actions for CI/CD. All sensitive data (e.g., API keys, DB passwords) is managed via AWS Secrets Manager. The total cost is controlled under $50/month with budgets.
 
 **Key goals**:
-- Support Azure OpenAI gpt-4o model.
-- Handle high availability with auto-scaling.
-- Ensure security and monitoring.
-- Easy troubleshooting for common issues like 401 errors.
+- Infrastructure Design
+- DevOps Implementation
+- Security & Operations
 
 ## Architecture
 The architecture is designed as a multi-tier setup in AWS VPC, with public-facing components (ALB) in public subnets and backend services (ECS, RDS, Redis) in private subnets for security. Below is a detailed breakdown of components and their configurations:
@@ -34,8 +33,8 @@ The architecture is designed as a multi-tier setup in AWS VPC, with public-facin
     - Network Mode: awsvpc
     - Container: litellm-proxy (image from ECR: 732963826670.dkr.ecr.ap-northeast-1.amazonaws.com/litellm-proxy:latest)
     - Port: 8000
-    - Environment Variables: REDIS_URL (from ElastiCache), LITELLM_CONFIG_FILE (/app/litellm-config.yaml), AZURE_API_BASE (hardcoded or from var)
-    - Secrets: LITELLM_CONFIG, DATABASE_URL, AZURE_API_KEY, LITELLM_MASTER_KEY (from Secrets Manager)
+    - Environment Variables: REDIS_URL (from ElastiCache), LITELLM_CONFIG_FILE (/app/litellm-config.yaml), AZURE_API_BASE
+    - Secrets: LITELLM_CONFIG, DATABASE_URL, AZURE_API_KEY, LITELLM_MASTER_KEY
     - Logs: CloudWatch group /ecs/litellm-ap-northeast-1
   - Service: ecs-service-ap-northeast-1-prod-litellm (desired count 1, FARGATE)
   - Auto-Scaling: AppAutoScaling target (min 1, max 2), policy for CPU >70%
@@ -62,7 +61,7 @@ The architecture is designed as a multi-tier setup in AWS VPC, with public-facin
   - Nodes: 1
   - Parameter Group: default.redis7
   - Subnet Group: elasticache-subnet-group-ap-northeast-1-prod-litellm (private subnets)
-  - Security Group: Inbound TCP 6379 from ECS SG and your IP (e.g., 223.19.72.110/32)
+  - Security Group: Inbound TCP 6379 from ECS SG and your IP
   - Cluster ID: elasticache-ap-northeast-1-prod-litellm-redis
   - Tags: ApplicationName = "resolallmproxy"
 
@@ -77,7 +76,7 @@ The architecture is designed as a multi-tier setup in AWS VPC, with public-facin
   - Tags: ApplicationName = "resolallmproxy"
 
 - **Secrets Manager**:
-  - Secrets: litellm-config (YAML file), postgres-password, postgres-db-url (full DATABASE_URL), azure-api-key, litellm-master-key
+  - Secrets: litellm-config (YAML file), postgres-password, postgres-db-url, azure-api-key, litellm-master-key
   - IAM Policy: ECS execution role allows GetSecretValue for these ARNs
 
 - **Monitoring & Alerts**:
@@ -88,7 +87,7 @@ The architecture is designed as a multi-tier setup in AWS VPC, with public-facin
 - **Other Components**:
   - ECR: litellm-proxy repo for Docker image
   - Route53: Zone resola-litellm.com
-  - S3: Bucket s3-ap-northeast-1-prod-litellm-storage (versioned, private ACL)
+  - S3: Bucket s3-ap-northeast-1-prod-litellm-storage
 
 - **Dockerfile Config**:
   - Base: python:3.10-slim
@@ -113,7 +112,7 @@ This section details all setup steps from initial configuration to deployment an
      - postgres_username: "llmadmin"
      - postgres_password: Sensitive, set via tfvars or env (e.g., export TF_VAR_postgres_password="your_pass")
      - litellm_image: "732963826670.dkr.ecr.ap-northeast-1.amazonaws.com/litellm-proxy:latest"
-     - litellm_master_key: "sk-1234567890abcdefghijklm"
+     - litellm_master_key: "KEY"
      - azure_api_base: "https://jacka-md8ldwnu-eastus2.openai.azure.com/"
      - azure_api_key: Sensitive, set via tfvars.
    - Create terraform.tfvars for sensitive vars (ignored in .gitignore):
@@ -139,8 +138,8 @@ This section details all setup steps from initial configuration to deployment an
 6. **Testing**:
 - Get ALB DNS: From AWS Console > EC2 > Load Balancers > alb-ap-northeast-1-prod-litellm > DNS name.
 - Health check: `curl http://<alb-dns>/health` (expect 200 OK).
-- Model test: `curl -H "Authorization: Bearer sk-1234567890abcdefghijklm" http://<alb-dns>/v1/models`.
-- Full API: `curl -X POST http://<alb-dns>/v1/chat/completions -H "Authorization: Bearer sk-1234567890abcdefghijklm" -H "Content-Type: application/json" -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'`.
+- Model test: `curl -H "Authorization: Bearer KEY" http://<alb-dns>/v1/models`.
+- Full API: `curl -X POST http://<alb-dns>/v1/chat/completions -H "Authorization: Bearer KEY" -H "Content-Type: application/json" -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'`.
 
 7. **Cleanup**:
 - Destroy resources: `terraform destroy` (avoid ongoing costs).
@@ -151,13 +150,6 @@ During development, several issues were encountered and resolved. Below is a det
 - **401 Unauthorized Error (Most Common)**:
 - **Symptoms**: curl /health or /v1/models returns 401, logs show "Authentication Error" or "No connected db".
 - **Causes**: DB/Redis connection failure, invalid Azure key, master key missing in header, config.yaml not loaded.
-- **Fixes**:
-- Hardcode config in Dockerfile entrypoint.sh to bypass env vars/Secrets Manager.
-- Verify Azure key: Direct curl to Azure endpoint (e.g., curl -X POST "https://jacka-md8ldwnu-eastus2.openai.azure.com/openai/deployments/gpt-4o-resola-llm/chat/completions?api-version=2024-10-21" -H "api-key: your_key" ...).
-- Add master key header in curls.
-- Bypass DB/Redis in config.yaml if not needed (remove database_url/redis_url).
-- Update api_version to "2024-10-21" for compatibility.
-
 - **DB Connection Timeout (P1001 Prisma Error)**:
 - **Symptoms**: psql or Docker logs show "Can't reach database server", Operation timed out.
 - **Causes**: RDS not publicly accessible, wrong subnet group (private instead of public), SG not allowing IP.
@@ -168,23 +160,9 @@ During development, several issues were encountered and resolved. Below is a det
 - Test psql: `psql -h <endpoint> -p 5432 -U llmadmin -d litellmresola --set=sslmode=require`.
 - Install psql if missing: `brew install libpq`, add to PATH.
 
-- **Git Push File Size Limit Error**:
-- **Symptoms**: Push fails with "file exceeds GitHub's file size limit of 100.00 MB" (e.g., terraform-provider-aws binary ~664 MB).
-- **Causes**: .terraform/ directory committed (Terraform init downloads large binaries).
-- **Fixes**:
-- Add .gitignore to ignore .terraform/.
-- Remove from staging: `git rm --cached -r .terraform/`.
-- Re-commit and push.
-
 - **ECR Push 401 Unauthorized**:
 - **Symptoms**: Docker push fails with authentication error.
 - **Causes**: AWS CLI not configured or credentials expired.
-- **Fixes**: `aws configure` to set keys/region, re-run ECR login command.
-
-- **Terraform Apply Errors**:
-- **Symptoms**: Resource creation fails (e.g., RDS in wrong subnet).
-- **Causes**: Config mismatches (e.g., private subnet with publicly_accessible=true).
-- **Fixes**: Validate with `terraform validate`, plan first, update subnet groups.
 
 - **Other Minor Issues**:
 - AWS CLI Endpoint Error: Add --region ap-northeast-1 to commands.
